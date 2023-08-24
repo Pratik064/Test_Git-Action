@@ -1,0 +1,106 @@
+---
+name: CI-CD
+on:
+  # Workflow triggers when a tag of given pattern is pushed
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+-rc[0-9]+', 'v[0-9]+.[0-9]+.[0-9]+']
+jobs:
+  build-and-push-dockerimages:
+    permissions:
+      contents: read
+      packages: write
+    secrets:
+      # Secret for Github Container Registry
+      GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+    uses: Calance-US/calance-workflows/.github/workflows/build.yml@v1.0.7
+    with:
+      # Name for the image that will be built (Defaults to repository name)
+      image_name: service_name
+
+      # Docker Context Path (Defaults to .)
+      docker_context_path: .
+
+      # Path to the Dockerfile (Defaults to ./Dockerfile)
+      dockerfile_path: ./Dockerfile
+
+      # Build time environment variables as multiline string for testing environment (Defaults to "")
+      dot_env_file_testing: ''
+
+      # Build time environment variables as multiline string for production environment (Defaults to "")
+      dot_env_file_production: ''
+
+      # Branch that we want to build (Defaults to branch which triggered the workflow)
+      branch_name: ''
+  vulnerability-scan:
+    needs: build-and-push-dockerimages
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code  # action to fetch the code from repo.
+        uses: actions/checkout@v3
+      - name: Build an image from Dockerfile  # builds the image.
+        run: |
+          docker build -t docker.io/my-organization/my-app:${{ github.sha }} .
+      - name: Run Trivy vulnerability scanner  # runs the scanner.
+        uses: aquasecurity/trivy-action@7b7aa264d83dc58691451798b4d117d53d21edfe
+        with:
+          image-ref: docker.io/my-organization/my-app:${{ github.sha }}
+          format: table
+          output: trivy-results.json
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+      - name : Get the scan result as Json format
+        uses: aquasecurity/trivy-action@7b7aa264d83dc58691451798b4d117d53d21edfe
+        with:
+          image-ref: docker.io/my-organization/my-app:${{ github.sha }}
+          format: json
+          output: trivy-results-json-format.json
+          severity: CRITICAL,HIGH
+      - name: Upload Trivy scan results as an artifact
+        uses: actions/upload-artifact@v2
+        with:
+          name: trivy-results
+          path: ${{ github.workspace }}/trivy-results.json
+      - name: Upload Json formated result   
+        uses: actions/upload-artifact@v2 
+        with:
+          name: Json Format
+          path: ${{ github.workspace }}/trivy-results-json-format.json
+      - name: Extract High and Critical Vulnerabilities
+        id: extract-vulnerabilities
+        run: |
+          trivy_results=$(cat trivy-results-json-format.json)
+          vulnerabilities=$(echo "$trivy_results" | jq -r '.Results[0].Vulnerabilities[] | select(.Severity | test("CRITICAL|HIGH"))')
+          echo "::set-output name=vulnerabilities::$vulnerabilities"
+      - name: Send mail
+        uses: dawidd6/action-send-mail@v3
+        with:
+          # connection_url: ${{secrets.MAIL_CONNECTION}}
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{secrets.MAIL_USERNAME}}
+          password: ${{secrets.MAIL_PASSWORD}}
+          subject: Results of vulnerability scan 
+          to: pratikdevlekar@gmail.com
+          from: Nakshkashyap12@gmail.com
+          body: Build job of ${{github.repository}} completed successfully!
+          html_body: |
+            <!DOCTYPE html>
+            <html>
+            <head>
+              <title>GitHub Actions Email</title>
+            </head>
+            <body>
+              <h1>GitHub Actions Notification</h1>
+              <p>This is a notification email from a GitHub Actions workflow.</p>
+              <p>Here are the results of the vulnerability scan which are Critical and High on severity:</p>
+              <ul>
+                ${{ steps.extract-vulnerabilities.outputs.vulnerabilities }}
+              </ul>
+              <p>For the complete report on the vulnerability scan, please refer to the attachment.</p>
+            </body>
+            </html>
+          cc: pratikdevlekar64@gmail.com
+          ignore_cert: true
+          convert_markdown: true
+          attachments: trivy-report.zip
+          priority: low
