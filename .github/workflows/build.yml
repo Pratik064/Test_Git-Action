@@ -1,4 +1,3 @@
----
 name: CI-CD
 on:
   # Workflow triggers when a tag of given pattern is pushed
